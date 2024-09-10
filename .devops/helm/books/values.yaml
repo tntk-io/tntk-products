@@ -1,0 +1,52 @@
+fullnameOverride: "books"
+replicaCount: 1
+
+image:
+  repository: nginx
+  pullPolicy: IfNotPresent
+  tag: ""
+
+configmapData:
+  SSM_PREFIX: "/placeholder"
+  AWS_REGION: "placeholder"
+  S3_BUCKET_NAME: "ssm:/s3_bucket/for_output_files/name"
+  DYNAMODB_TABLE_NAME: "ssm:/dynamodb/table_name"
+  DB_HOST: "ssm:/rds/endpoint"
+  DB_PORT: "3306"
+  DB_USERNAME: "ssm:/rds/username"
+  DB_PASSWORD: "ssm:/rds/password"
+  DB_NAME: "ssm:/rds/db_name"
+
+serviceAccount:
+  create: false
+
+service:
+  type: ClusterIP
+  port: 80
+
+resources: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+
+podAnnotations: {}
+
+podSecurityContext: {}
+
+securityContext: {}
+
+
+
+global:
+  nodeSelector: {}
+
+  tolerations: []
+
+  affinity: {}
+
+  service:
+    type: ClusterIP
+    port: 80
