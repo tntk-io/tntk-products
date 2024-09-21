@@ -62,17 +62,61 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v4
+
+      - name: Install AWS CLI
+        run: apk add --no-cache python3 py3-pip && pip3 install awscli
+
+      - name: Fetch config values from AWS SSM
+        id: fetch_ssm_params
+        run: |
+          POSTGRES_USER=$(aws ssm get-parameter --name "/$ENVIRONMENT/rds/username" --with-decryption --query "Parameter.Value" --output text)
+          POSTGRES_PASSWORD=$(aws ssm get-parameter --name "/$ENVIRONMENT/rds/password" --with-decryption --query "Parameter.Value" --output text)
+          POSTGRES_DB=$(aws ssm get-parameter --name "/$ENVIRONMENT/rds/db_name" --with-decryption --query "Parameter.Value" --output text)
+          POSTGRES_HOST=$(aws ssm get-parameter --name "/$ENVIRONMENT/rds/endpoint" --with-decryption --query "Parameter.Value" --output text)
+          REDIS_HOST=$(aws ssm get-parameter --name "/$ENVIRONMENT/redis/endpoint" --with-decryption --query "Parameter.Value" --output text)
+          RABBITMQ_HOST=$(aws ssm get-parameter --name "/$ENVIRONMENT/rabbitmq/endpoint" --with-decryption --query "Parameter.Value" --output text)
+          RABBITMQ_USERNAME=$(aws ssm get-parameter --name "/$ENVIRONMENT/rabbitmq/username" --with-decryption --query "Parameter.Value" --output text)
+          RABBITMQ_PASSWORD=$(aws ssm get-parameter --name "/$ENVIRONMENT/rabbitmq/password" --with-decryption --query "Parameter.Value" --output text)
+          SECRET_KEY=$(openssl rand -hex 32)
+
+          echo "::set-output name=POSTGRES_USER::$POSTGRES_USER"
+          echo "::set-output name=POSTGRES_PASSWORD::$POSTGRES_PASSWORD"
+          echo "::set-output name=POSTGRES_DB::$POSTGRES_DB"
+          echo "::set-output name=POSTGRES_HOST::$POSTGRES_HOST"
+          echo "::set-output name=SECRET_KEY::$SECRET_KEY"
+          echo "::set-output name=REDIS_HOST::$REDIS_HOST"
+          echo "::set-output name=RABBITMQ_HOST::$RABBITMQ_HOST"
+          echo "::set-output name=RABBITMQ_USERNAME::$RABBITMQ_USERNAME"
+          echo "::set-output name=RABBITMQ_PASSWORD::$RABBITMQ_PASSWORD"
+
       - name: deploy to k8s
         env:
           REGISTRY: ${{ needs.build_images_and_push.outputs.registry }}
           SHA8: ${{ needs.get_inputs.outputs.sha8 }}
+          POSTGRES_USER: ${{ steps.fetch_ssm_params.outputs.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ steps.fetch_ssm_params.outputs.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ steps.fetch_ssm_params.outputs.POSTGRES_DB }}
+          POSTGRES_HOST: ${{ steps.fetch_ssm_params.outputs.POSTGRES_HOST }}
+          POSTGRES_PORT: ${{ steps.fetch_ssm_params.outputs.POSTGRES_PORT }}
+          SECRET_KEY: ${{ steps.fetch_ssm_params.outputs.SECRET_KEY }}
+          REDIS_HOST: ${{ steps.fetch_ssm_params.outputs.REDIS_HOST }}
+          RABBITMQ_HOST: ${{ steps.fetch_ssm_params.outputs.RABBITMQ_HOST }}
+          RABBITMQ_USERNAME: ${{ steps.fetch_ssm_params.outputs.RABBITMQ_USERNAME }}
+          RABBITMQ_PASSWORD: ${{ steps.fetch_ssm_params.outputs.RABBITMQ_PASSWORD }}
         run: |
           rm -rf manifest
           helm template $APPLICATION_NAME .devops/helm/books -f .devops/helm/books/values.yaml  --create-namespace -n $APPLICATION_NAMESPACE --output-dir manifest \
             --set image.repository=$REGISTRY/$ENVIRONMENT/books \
             --set image.tag=$SHA8 \
-            --set configmapData.SSM_PREFIX=/$ENVIRONMENT \
-            --set configmapData.AWS_REGION=$AWS_REGION \
+            --set configmapData.POSTGRES_USER=$POSTGRES_USER \
+            --set configmapData.POSTGRES_PASSWORD=$POSTGRES_PASSWORD \
+            --set configmapData.POSTGRES_DB=$POSTGRES_DB \
+            --set configmapData.POSTGRES_HOST=$POSTGRES_HOST \
+            --set configmapData.SECRET_KEY=$SECRET_KEY \
+            --set configmapData.REDIS_HOST=$REDIS_HOST \
+            --set configmapData.RABBITMQ_HOST=$RABBITMQ_HOST \
+            --set configmapData.RABBITMQ_USERNAME=$RABBITMQ_USERNAME \
+            --set configmapData.RABBITMQ_PASSWORD=$RABBITMQ_PASSWORD
 
       - name: Pushes to another repository
         uses: cpina/github-action-push-to-another-repository@main
