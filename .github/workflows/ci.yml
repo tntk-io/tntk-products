@@ -54,21 +54,36 @@ jobs:
           docker build -f .devops/docker/$COMPONENT_NAME.dockerfile -t $REGISTRY/$ENVIRONMENT/$COMPONENT_NAME:$SHA8 src/$COMPONENT_NAME/
           docker push $REGISTRY/$ENVIRONMENT/$COMPONENT_NAME:$SHA8
 
+
   k8s_manifest_storing:
     needs: [build_images_and_push, get_inputs]
     runs-on: self-hosted
-    container:
-      image: alpine/helm:latest
     steps:
       - name: Check out
         uses: actions/checkout@v4
 
-      - name: Install AWS CLI
-        run: apk add --no-cache python3 py3-pip && pip3 install awscli
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: "false"
+
+
+      - name: Install AWS CLI v2
+        run: |
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install
+      - name: Install Helm
+        run: |
+          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+          sudo chmod 700 get_helm.sh
+          sudo ./get_helm.sh
 
       - name: Fetch config values from AWS SSM
         id: fetch_ssm_params
         run: |
+          unset AWS_SESSION_TOKEN
           POSTGRES_USER=$(aws ssm get-parameter --name "/$ENVIRONMENT/rds/username" --with-decryption --query "Parameter.Value" --output text)
           POSTGRES_PASSWORD=$(aws ssm get-parameter --name "/$ENVIRONMENT/rds/password" --with-decryption --query "Parameter.Value" --output text)
           POSTGRES_DB=$(aws ssm get-parameter --name "/$ENVIRONMENT/rds/db_name" --with-decryption --query "Parameter.Value" --output text)
@@ -122,10 +137,10 @@ jobs:
         uses: cpina/github-action-push-to-another-repository@main
         env:
           API_TOKEN_GITHUB: ${{ secrets.API_TOKEN_GITHUB }}
-          CD_DESTINATION: ${{ secrets.API_TOKEN_GITHUB }}
         with:
           source-directory: "manifest"
-          target-directory: "bookapp/charts/books"
+          target-directory: "bookapp/"
           destination-github-username: ${{ env.CD_DESTINATION_OWNER }}
           destination-repository-name: ${{ env.CD_PROJECT }}
           target-branch: ${{ env.ENVIRONMENT }}
+
