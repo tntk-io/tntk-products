@@ -1,146 +1,115 @@
-name: Integration
+name: Docker Build and Deploy
 
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
   push:
-    branches: ["prod"]
-  pull_request:
-    branches: ["prod"]
+    branches:
+      - stage
+      - main
 
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
-
-env:
-  ENVIRONMENT: ${{ github.ref_name }}
-  AWS_REGION: ${{ vars.AWS_REGION }}
-  APPLICATION_NAME: ${{ vars.APPLICATION_NAME }}
-  APPLICATION_NAMESPACE: ${{ vars.APPLICATION_NAMESPACE }}
-  CD_DESTINATION_OWNER: ${{ vars.CD_DESTINATION_OWNER }}
-  CD_PROJECT: ${{ vars.CD_PROJECT }}
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
-  get_inputs:
-    outputs:
-      sha8: ${{ steps.slug.outputs.sha8 }}
-    runs-on: self-hosted
+  build-tag-push:
+    runs-on: ubuntu-latest
     steps:
-      - name: Get short SHA
-        id: slug
-        run: echo "sha8=$(echo ${GITHUB_SHA} | cut -c1-8)" >> $GITHUB_OUTPUT
-      
-  build_images_and_push:
-    needs: [get_inputs]
-    runs-on: self-hosted
-    outputs:
-      registry: ${{ steps.login-ecr.outputs.registry }}
-    steps:
-      - name: Check out
+      - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-region: ${{ env.AWS_REGION }}
-          mask-aws-account-id: "false"
+          role-to-assume: arn:aws:iam::954045451317:role/github-actions-ecr
+          aws-region: us-west-2
+          role-session-name: OIDCSession
+
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
-      - name: Build books image and push to ECR
+
+      - name: Build, tag, and push docker image for prod
+        if: github.ref == 'refs/heads/main'
         env:
-          SHA8: ${{ needs.get_inputs.outputs.sha8 }}
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          COMPONENT_NAME: "books"
+          REPOSITORY: tntk-api
+          PROD_TAG: ${{ github.sha }}
         run: |
-          docker build -f .devops/docker/$COMPONENT_NAME.dockerfile -t $REGISTRY/$ENVIRONMENT/$COMPONENT_NAME:$SHA8 src/$COMPONENT_NAME/
-          docker push $REGISTRY/$ENVIRONMENT/$COMPONENT_NAME:$SHA8
+          docker build -t $REGISTRY/$REPOSITORY:$PROD_TAG .
+          docker tag $REGISTRY/$REPOSITORY:$PROD_TAG $REGISTRY/$REPOSITORY:latest
+          docker push $REGISTRY/$REPOSITORY:$PROD_TAG
+          docker push $REGISTRY/$REPOSITORY:latest
 
-
-  k8s_manifest_storing:
-    needs: [build_images_and_push, get_inputs]
-    runs-on: self-hosted
+      - name: Build, tag, and push docker image for stage
+        if: github.ref == 'refs/heads/stage'
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: tntk-api-dev
+          STAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $REGISTRY/$REPOSITORY:$STAGE_TAG .
+          docker tag $REGISTRY/$REPOSITORY:$STAGE_TAG $REGISTRY/$REPOSITORY:latest
+          docker push $REGISTRY/$REPOSITORY:$STAGE_TAG
+          docker push $REGISTRY/$REPOSITORY:latest
+  manifest-updates:
+    runs-on: ubuntu-latest
+    needs: build-tag-push
     steps:
-      - name: Check out
+      - name: Checkout Helm chart repository
         uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-region: ${{ env.AWS_REGION }}
-          mask-aws-account-id: "false"
-
-
-      - name: Install AWS CLI v2
+          repository: "tntk-io/tntk-k8s-manifests"
+          token: ${{ secrets.GH_TOKEN }}
+      - name: Install yq
         run: |
-          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-          unzip awscliv2.zip
-          sudo ./aws/install
-      - name: Install Helm
-        run: |
-          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-          sudo chmod 700 get_helm.sh
-          sudo ./get_helm.sh
-
-      - name: Fetch config values from AWS SSM
-        id: fetch_ssm_params
-        run: |
-          unset AWS_SESSION_TOKEN
-          POSTGRES_USER=$(aws ssm get-parameter --name "/$ENVIRONMENT/rds/username" --with-decryption --query "Parameter.Value" --output text)
-          POSTGRES_PASSWORD=$(aws ssm get-parameter --name "/$ENVIRONMENT/rds/password" --with-decryption --query "Parameter.Value" --output text)
-          POSTGRES_DB=$(aws ssm get-parameter --name "/$ENVIRONMENT/rds/db_name" --with-decryption --query "Parameter.Value" --output text)
-          POSTGRES_HOST=$(aws ssm get-parameter --name "/$ENVIRONMENT/rds/endpoint" --with-decryption --query "Parameter.Value" --output text)
-          REDIS_HOST=$(aws ssm get-parameter --name "/$ENVIRONMENT/redis/endpoint" --with-decryption --query "Parameter.Value" --output text)
-          RABBITMQ_HOST=$(aws ssm get-parameter --name "/$ENVIRONMENT/rabbitmq/endpoint" --with-decryption --query "Parameter.Value" --output text)
-          RABBITMQ_USERNAME=$(aws ssm get-parameter --name "/$ENVIRONMENT/rabbitmq/username" --with-decryption --query "Parameter.Value" --output text)
-          RABBITMQ_PASSWORD=$(aws ssm get-parameter --name "/$ENVIRONMENT/rabbitmq/password" --with-decryption --query "Parameter.Value" --output text)
-          SECRET_KEY=$(openssl rand -hex 32)
-
-          echo "::set-output name=POSTGRES_USER::$POSTGRES_USER"
-          echo "::set-output name=POSTGRES_PASSWORD::$POSTGRES_PASSWORD"
-          echo "::set-output name=POSTGRES_DB::$POSTGRES_DB"
-          echo "::set-output name=POSTGRES_HOST::$POSTGRES_HOST"
-          echo "::set-output name=SECRET_KEY::$SECRET_KEY"
-          echo "::set-output name=REDIS_HOST::$REDIS_HOST"
-          echo "::set-output name=RABBITMQ_HOST::$RABBITMQ_HOST"
-          echo "::set-output name=RABBITMQ_USERNAME::$RABBITMQ_USERNAME"
-          echo "::set-output name=RABBITMQ_PASSWORD::$RABBITMQ_PASSWORD"
-
-      - name: deploy to k8s
+          # Install yq if your runner doesn't have it
+          sudo wget https://github.com/mikefarah/yq/releases/download/v4.9.3/yq_linux_amd64 -O /usr/bin/yq
+          sudo chmod +x /usr/bin/yq
+      - name: Update prod manifest using yq
+        if: github.ref == 'refs/heads/main'
         env:
-          REGISTRY: ${{ needs.build_images_and_push.outputs.registry }}
-          SHA8: ${{ needs.get_inputs.outputs.sha8 }}
-          POSTGRES_USER: ${{ steps.fetch_ssm_params.outputs.POSTGRES_USER }}
-          POSTGRES_PASSWORD: ${{ steps.fetch_ssm_params.outputs.POSTGRES_PASSWORD }}
-          POSTGRES_DB: ${{ steps.fetch_ssm_params.outputs.POSTGRES_DB }}
-          POSTGRES_HOST: ${{ steps.fetch_ssm_params.outputs.POSTGRES_HOST }}
-          POSTGRES_PORT: ${{ steps.fetch_ssm_params.outputs.POSTGRES_PORT }}
-          SECRET_KEY: ${{ steps.fetch_ssm_params.outputs.SECRET_KEY }}
-          REDIS_HOST: ${{ steps.fetch_ssm_params.outputs.REDIS_HOST }}
-          RABBITMQ_HOST: ${{ steps.fetch_ssm_params.outputs.RABBITMQ_HOST }}
-          RABBITMQ_USERNAME: ${{ steps.fetch_ssm_params.outputs.RABBITMQ_USERNAME }}
-          RABBITMQ_PASSWORD: ${{ steps.fetch_ssm_params.outputs.RABBITMQ_PASSWORD }}
+          SERVICE_NAME: "tntk-api" # This could be dynamically determined
+          PROD_TAG: ${{ github.sha }}
+          PROD_YAML_FILE: "environments/values-prod.yaml"
         run: |
-          rm -rf manifest
-          helm template $APPLICATION_NAME .devops/helm/books -f .devops/helm/books/values.yaml  --create-namespace -n $APPLICATION_NAMESPACE --output-dir manifest \
-            --set image.repository=$REGISTRY/$ENVIRONMENT/books \
-            --set image.tag=$SHA8 \
-            --set configmapData.POSTGRES_USER=$POSTGRES_USER \
-            --set configmapData.POSTGRES_PASSWORD=$POSTGRES_PASSWORD \
-            --set configmapData.POSTGRES_DB=$POSTGRES_DB \
-            --set configmapData.POSTGRES_HOST=$POSTGRES_HOST \
-            --set configmapData.SECRET_KEY=$SECRET_KEY \
-            --set configmapData.REDIS_HOST=$REDIS_HOST \
-            --set configmapData.RABBITMQ_HOST=$RABBITMQ_HOST \
-            --set configmapData.RABBITMQ_USERNAME=$RABBITMQ_USERNAME \
-            --set configmapData.RABBITMQ_PASSWORD=$RABBITMQ_PASSWORD
-
-      - name: Pushes to another repository
-        uses: cpina/github-action-push-to-another-repository@main
+          yq eval ".tntkApi.docker.image.tag = \"$PROD_TAG\"" -i $PROD_YAML_FILE
+      - name: Update stage manifest using yq
+        if: github.ref == 'refs/heads/stage'
         env:
-          API_TOKEN_GITHUB: ${{ secrets.API_TOKEN_GITHUB }}
-        with:
-          source-directory: "manifest"
-          target-directory: "bookapp/"
-          destination-github-username: ${{ env.CD_DESTINATION_OWNER }}
-          destination-repository-name: ${{ env.CD_PROJECT }}
-          target-branch: ${{ env.ENVIRONMENT }}
-
+          SERVICE_NAME: "tntk-api" # This could be dynamically determined
+          STAGE_TAG: ${{ github.sha }}
+          DEV_YAML_FILE: "environments/values-dev.yaml"
+        run: |
+          yq eval ".tntkApi.docker.image.tag = \"$STAGE_TAG\"" -i $DEV_YAML_FILE
+      - name: Push prod manifests to tntk-k8s-manifests
+        if: github.ref == 'refs/heads/main'
+        env:
+          SERVICE_NAME: "tntk-api" # This could be dynamically determined
+          PROD_TAG: ${{ github.sha }}
+          PROD_YAML_FILE: "environments/values-prod.yaml"
+        run: |
+          # Setting up Git for commit
+          git config --global user.name 'TNTK'
+          git config --global user.email 'actions@tntk.io'
+          git add $PROD_YAML_FILE
+          git commit -m "Update $SERVICE_NAME image tag to $PROD_TAG"
+          git push
+      - name: Push stage manifests to tntk-k8s-manifests
+        if: github.ref == 'refs/heads/stage'
+        env:
+          SERVICE_NAME: "tntk-api" # This could be dynamically determined
+          STAGE_TAG: ${{ github.sha }}
+          STAGE_YAML_FILE: "environments/values-dev.yaml"
+        run: |
+          # Setting up Git for commit
+          git config --global user.name 'TNTK'
+          git config --global user.email 'actions@tntk.io'
+          git add $STAGE_YAML_FILE
+          git commit -m "Update $SERVICE_NAME image tag to $STAGE_TAG"
+          git push
