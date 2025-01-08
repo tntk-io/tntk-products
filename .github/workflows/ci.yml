@@ -95,8 +95,8 @@ jobs:
           PROD_YAML_FILE: "environments/values-prod.yaml"
         run: |
           # Setting up Git for commit
-          git config --global user.name 'TNTK'
-          git config --global user.email 'actions@tntk.io'
+          git config --global user.name '${{ vars.GITHUB_NAME }}'
+          git config --global user.email '${{ vars.GITHUB_EMAIL }}'
           git add $PROD_YAML_FILE
           git commit -m "Update $SERVICE_NAME image tag to $PROD_TAG"
           git push
@@ -108,8 +108,8 @@ jobs:
           STAGE_YAML_FILE: "environments/values-dev.yaml"
         run: |
           # Setting up Git for commit
-          git config --global user.name 'TNTK'
-          git config --global user.email 'actions@tntk.io'
+          git config --global user.name '${{ vars.GITHUB_NAME }}'
+          git config --global user.email '${{ vars.GITHUB_EMAIL }}'
           git add $STAGE_YAML_FILE
           git commit -m "Update $SERVICE_NAME image tag to $STAGE_TAG"
           git push
