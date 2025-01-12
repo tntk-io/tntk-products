@@ -1,3 +1,4 @@
+![TNTK DevOps Logo](assets/tntk_devops.png)
 # TENTEK Products
 
 ## Overview
