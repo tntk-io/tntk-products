@@ -10,6 +10,17 @@ permissions:
   id-token: write
   contents: read
 
+env:
+  ENVIRONMENT: ${{ github.ref_name }}
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
+  APPLICATION_NAME: ${{ vars.APPLICATION_NAME }}
+  APPLICATION_NAMESPACE: ${{ vars.APPLICATION_NAMESPACE }}
+  CD_DESTINATION_OWNER: ${{ vars.CD_DESTINATION_OWNER }}
+  CD_PROJECT: ${{ vars.CD_PROJECT }}
+  GITHUB_SHA: ${{ github.sha }}
+  YQ_PATH: ${{ vars.YQ_PATH }}
+
 jobs:
   build-tag-push:
     runs-on: ubuntu-latest
@@ -78,7 +89,7 @@ jobs:
           PROD_TAG: ${{ github.sha }}
           PROD_YAML_FILE: "environments/values-prod.yaml"
         run: |
-          yq eval ".tntkProducts.docker.image.tag = \"$PROD_TAG\"" -i $PROD_YAML_FILE
+          yq eval ".${{ vars.YQ_PATH }}.docker.image.tag = \"$PROD_TAG\"" -i $PROD_YAML_FILE
       - name: Update stage manifest using yq
         if: github.ref == 'refs/heads/stage'
         env:
@@ -86,7 +97,7 @@ jobs:
           STAGE_TAG: ${{ github.sha }}
           DEV_YAML_FILE: "environments/values-dev.yaml"
         run: |
-          yq eval ".tntkProducts.docker.image.tag = \"$STAGE_TAG\"" -i $DEV_YAML_FILE
+          yq eval ".${{ vars.YQ_PATH }}.docker.image.tag = \"$STAGE_TAG\"" -i $DEV_YAML_FILE
       - name: Push prod manifests to tntk-k8s-manifests
         if: github.ref == 'refs/heads/main'
         env:
