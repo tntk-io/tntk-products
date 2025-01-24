@@ -19,11 +19,12 @@ env:
   CD_DESTINATION_OWNER: ${{ vars.CD_DESTINATION_OWNER }}
   CD_PROJECT: ${{ vars.CD_PROJECT }}
   GITHUB_SHA: ${{ github.sha }}
-  YQ_PATH: ${{ vars.YQ_PATH }}
   GHA_ECR_ROLE_ARN: ${{ vars.GHA_ECR_ROLE_ARN }}
+  YQ_PATH: ${{ vars.YQ_PATH }}
+
 jobs:
   build-tag-push:
-    runs-on: tntk-products
+    runs-on: tntk-web
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -61,7 +62,7 @@ jobs:
         if: github.ref == 'refs/heads/stage'
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          REPOSITORY: tntk-api-dev
+          REPOSITORY: ${{ vars.APPLICATION_NAME }}-dev
           STAGE_TAG: ${{ github.sha }}
         run: |
           docker build -t $REGISTRY/$REPOSITORY:$STAGE_TAG .
@@ -69,14 +70,16 @@ jobs:
           docker push $REGISTRY/$REPOSITORY:$STAGE_TAG
           docker push $REGISTRY/$REPOSITORY:latest
   manifest-updates:
-    runs-on: tntk-products
+    runs-on: ubuntu-latest
     needs: build-tag-push
     steps:
       - name: Checkout Helm chart repository
+        env:
+          GITHUB_TOKEN: ${{ secrets.API_TOKEN_GITHUB }}
         uses: actions/checkout@v4
         with:
-          repository: "${{ vars.CD_DESTINATION_OWNER }}/${{ vars.CD_PROJECT }}"
-          token: ${{ secrets.API_TOKEN_GITHUB }}
+          repository: ${{ vars.CD_DESTINATION_OWNER }}/${{ vars.CD_PROJECT }}
+          token: ${{ env.GITHUB_TOKEN }}
       - name: Install yq
         run: |
           # Install yq if your runner doesn't have it
@@ -87,27 +90,27 @@ jobs:
         env:
           SERVICE_NAME: ${{ vars.APPLICATION_NAME }}
           PROD_TAG: ${{ github.sha }}
-          PROD_YAML_FILE: "environments/values-prod.yaml"
+          PROD_YAML_FILE: "environments/dev/values.yaml"
         run: |
-          yq eval ".${{ vars.YQ_PATH }}.docker.image.tag = \"$PROD_TAG\"" -i $PROD_YAML_FILE
+          yq eval ".${{ vars.YQ_PATH }}.image.tag = \"$PROD_TAG\"" -i $PROD_YAML_FILE
       - name: Update stage manifest using yq
         if: github.ref == 'refs/heads/stage'
         env:
-          SERVICE_NAME: ${{ vars.APPLICATION_NAME }}
+          SERVICE_NAME: ${{ vars.APPLICATION_NAME }} # This could be dynamically determined
           STAGE_TAG: ${{ github.sha }}
-          DEV_YAML_FILE: "environments/values-dev.yaml"
+          DEV_YAML_FILE: "environments/dev/values.yaml"
         run: |
-          yq eval ".${{ vars.YQ_PATH }}.docker.image.tag = \"$STAGE_TAG\"" -i $DEV_YAML_FILE
+          yq eval ".${{ vars.YQ_PATH }}.image.tag = \"$STAGE_TAG\"" -i $DEV_YAML_FILE
       - name: Push prod manifests to tntk-k8s-manifests
         if: github.ref == 'refs/heads/main'
         env:
           SERVICE_NAME: ${{ vars.APPLICATION_NAME }}
           PROD_TAG: ${{ github.sha }}
-          PROD_YAML_FILE: "environments/values-prod.yaml"
+          PROD_YAML_FILE: "environments/dev/values.yaml"
         run: |
           # Setting up Git for commit
-          git config --global user.name '${{ vars.GITHUB_NAME }}'
-          git config --global user.email '${{ vars.GITHUB_EMAIL }}'
+          git config --global user.name '${{ vars.GH_NAME }}'
+          git config --global user.email '${{ vars.GH_EMAIL }}'
           git add $PROD_YAML_FILE
           git commit -m "Update $SERVICE_NAME image tag to $PROD_TAG"
           git push
@@ -116,11 +119,11 @@ jobs:
         env:
           SERVICE_NAME: ${{ vars.APPLICATION_NAME }}
           STAGE_TAG: ${{ github.sha }}
-          STAGE_YAML_FILE: "environments/values-dev.yaml"
+          STAGE_YAML_FILE: "environments/dev/values.yaml"
         run: |
           # Setting up Git for commit
-          git config --global user.name '${{ vars.GITHUB_NAME }}'
-          git config --global user.email '${{ vars.GITHUB_EMAIL }}'
+          git config --global user.name '${{ vars.GH_NAME }}'
+          git config --global user.email '${{ vars.GH_EMAIL }}'
           git add $STAGE_YAML_FILE
           git commit -m "Update $SERVICE_NAME image tag to $STAGE_TAG"
           git push
